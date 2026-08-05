@@ -29,6 +29,9 @@ ENV NODE_ENV=production
 ENV PORT=3000
 
 
+RUN apk update && apk upgrade --no-cache
+
+
 RUN chown -R node:node /app
 
 
