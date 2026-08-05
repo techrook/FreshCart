@@ -1,7 +1,5 @@
 services:
-  # ==========================================
-  # Database Service (Postgres)
-  # ==========================================
+
   postgres:
     image: postgres:16-alpine
     container_name: freshcart-db
@@ -10,9 +8,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: mysecretpassword
     volumes:
-      # Named volume for database data persistence
       - postgres-data:/var/lib/postgresql/data
-      # Automatically seed database schema and initial data
       - ./checkout-api/db/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
@@ -25,16 +21,13 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # ==========================================
-  # Backend API Service (Express/TypeScript)
-  # ==========================================
   checkout-api:
     build:
       context: ./checkout-api
       dockerfile: Dockerfile
     container_name: freshcart-api
     environment:
-      # Host name is 'postgres' as resolved by docker DNS on the shared network
+
       DATABASE_URL: postgresql://postgres:mysecretpassword@postgres:5432/freshcart
       PORT: 3000
     ports:
@@ -46,9 +39,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ==========================================
-  # Frontend Service (Vite served via Nginx)
-  # ==========================================
   storefront:
     build:
       context: ./storefront
@@ -62,7 +52,7 @@ services:
       - checkout-api
     restart: unless-stopped
 
-# Define persistent named volume and shared bridge network
+
 volumes:
   postgres-data:
 
