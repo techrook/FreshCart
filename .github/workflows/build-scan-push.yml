@@ -35,12 +35,11 @@ jobs:
           workload_identity_provider: projects/983820798333/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
           service_account: github-actions-sa@freshcart-capstone-2234.iam.gserviceaccount.com
 
-      - name: Login to Artifact Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: _json_key
-          password: ${{ steps.auth.outputs.credentials_json }}
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
+      # -----------------------
 
       - name: Build Docker Image
         run: |
@@ -62,7 +61,7 @@ jobs:
     name: Deploy to Staging
     needs: build-and-scan
     runs-on: ubuntu-latest
-    environment: dev # Matches your terraform.tfvars environment
+    environment: dev 
 
     steps:
       - name: Checkout repository
