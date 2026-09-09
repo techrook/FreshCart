@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
 name: Build, Scan, and Deploy Staging
 
 on:
@@ -39,7 +40,7 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: |
           gcloud auth configure-docker ${{ env.REGISTRY }} --quiet
-      # -----------------------
+
 
       - name: Build Docker Image
         run: |
