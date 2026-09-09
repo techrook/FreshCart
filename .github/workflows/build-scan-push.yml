@@ -1,0 +1,92 @@
+name: Build, Scan, and Deploy Staging
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "checkout-api/**"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  WORKING_DIRECTORY: checkout-api
+  IMAGE_NAME: checkout-api
+  REGISTRY: us-east1-docker.pkg.dev/freshcart-capstone-2234/freshcart-repo
+
+jobs:
+  build-and-scan:
+    name: Build, Scan, and Push
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIRECTORY }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/983820798333/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
+          service_account: github-actions-sa@freshcart-capstone-2234.iam.gserviceaccount.com
+
+      - name: Login to Artifact Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: _json_key
+          password: ${{ steps.auth.outputs.credentials_json }}
+
+      - name: Build Docker Image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} .
+
+      - name: Run Trivy Vulnerability Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+          format: 'table'
+
+      - name: Push Docker Image to Registry
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  deploy-staging:
+    name: Deploy to Staging
+    needs: build-and-scan
+    runs-on: ubuntu-latest
+    environment: dev # Matches your terraform.tfvars environment
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth-deploy
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/983820798333/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
+          service_account: github-actions-sa@freshcart-capstone-2234.iam.gserviceaccount.com
+
+      - name: Deploy to Staging via IAP SSH
+        run: |
+          VM_NAME="freshcart-backend-vm-dev"
+          ZONE="us-east1-c"
+          NEW_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          
+          echo "Deploying new image to $VM_NAME: $NEW_IMAGE"
+          
+          # SSH through IAP and update the docker container (zero downtime)
+          gcloud compute ssh $VM_NAME \
+            --zone=$ZONE \
+            --tunnel-through-iap \
+            --command="sudo docker stop checkout-api || true && \
+                       sudo docker rm checkout-api || true && \
+                       sudo docker run -d --name checkout-api -p 80:3000 $NEW_IMAGE"
