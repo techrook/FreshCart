@@ -16,7 +16,6 @@ app.use((_req, res, next) => {
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   next();
 });
-
 app.use(healthRouter);
 app.use(productsRouter);
 app.use(ordersRouter);
