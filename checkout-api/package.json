@@ -10,8 +10,12 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "cross-spawn": "^7.0.6",
     "express": "^4.21.2",
-    "pg": "^8.13.1"
+    "glob": "^13.0.6",
+    "minimatch": "^10.2.6",
+    "pg": "^8.13.1",
+    "tar": "^7.5.22"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",
