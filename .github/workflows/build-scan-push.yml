@@ -53,6 +53,7 @@ jobs:
           severity: 'CRITICAL,HIGH'
           exit-code: '1'
           format: 'table'
+          ignorefile: .trivyignore
 
       - name: Push Docker Image to Registry
         run: |
