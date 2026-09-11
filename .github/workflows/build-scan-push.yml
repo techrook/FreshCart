@@ -77,11 +77,11 @@ jobs:
       - name: Run Trivy Vulnerability Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
-          format: 'table'
-          trivyignores: 'checkout-api/.trivyignore'
+          image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          format: "table"
+          trivyignores: "checkout-api/.trivyignore"
 
       - name: Push Docker Image to Registry
         run: |
@@ -120,37 +120,38 @@ jobs:
           VM_NAME="freshcart-backend-vm-dev"
           ZONE="us-east1-c"
           NEW_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          
+
           echo "Deploying new image to $VM_NAME: $NEW_IMAGE"
-          
-          # 1. Create the deployment script locally in the GitHub Runner
+
+          # 1. Create the deployment script locally on the GitHub Runner
           cat > /tmp/deploy.sh << 'EOF'
           #!/bin/bash
           set -euo pipefail
           IMAGE="$1"
 
-          # Clear stale docker config that might trigger interactive gcloud prompts
-          rm -f /root/.docker/config.json
+          # Clear stale docker config that triggers interactive gcloud prompts
+          sudo rm -f /root/.docker/config.json
 
-          # Fetch token directly from GCE metadata server (dependency-free)
-          TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
-            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | \
-            grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+          # Fetch token directly from GCE metadata server
+          TOKEN=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
 
           # Non-interactive docker login
-          echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
+          echo "$TOKEN" | sudo docker login -u oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
 
           # Deploy the new container
-          docker stop checkout-api || true
-          docker rm checkout-api || true
-          docker pull "$IMAGE"
-          docker run -d --name checkout-api -p 80:3000 "$IMAGE"
+          sudo docker stop checkout-api || true
+          sudo docker rm checkout-api || true
+          sudo docker pull "$IMAGE"
+          sudo docker run -d --name checkout-api -p 80:3000 "$IMAGE"
+
+          echo "✅ Deployment successful!"
           EOF
 
-          # 2. Copy the script to the VM
-          gcloud compute scp /tmp/deploy.sh "$VM_NAME":/tmp/deploy.sh \
-            --zone="$ZONE" --tunnel-through-iap --quiet
+          # 2. Base64 encode the script to bypass ALL SSH quoting and scp issues
+          ENCODED_SCRIPT=$(base64 -w 0 /tmp/deploy.sh)
 
-          # 3. Execute the script on the VM with root privileges
-          gcloud compute ssh "$VM_NAME" --zone="$ZONE" --tunnel-through-iap \
-            --command="sudo bash /tmp/deploy.sh '$NEW_IMAGE'"
+          # 3. Decode and execute directly via a SINGLE, clean SSH connection
+          gcloud compute ssh "$VM_NAME" \
+            --zone="$ZONE" \
+            --tunnel-through-iap \
+            --command="echo '$ENCODED_SCRIPT' | base64 -d | sudo bash -s '$NEW_IMAGE'"
