@@ -123,12 +123,14 @@ jobs:
           
           echo "Deploying new image to $VM_NAME: $NEW_IMAGE"
           
-          # SSH through IAP, authenticate docker, and update the container
+          # SSH through IAP, authenticate docker with the VM's service account token, and update the container
           gcloud compute ssh $VM_NAME \
             --zone=$ZONE \
             --tunnel-through-iap \
-            --command="sudo gcloud auth configure-docker us-east1-docker.pkg.dev --quiet && \
-                       sudo docker stop checkout-api || true && \
-                       sudo docker rm checkout-api || true && \
-                       sudo docker pull $NEW_IMAGE && \
-                       sudo docker run -d --name checkout-api -p 80:3000 $NEW_IMAGE"
+            --command="
+              sudo docker login -u oauth2accesstoken -p \"\$(gcloud auth print-access-token)\" us-east1-docker.pkg.dev
+              sudo docker stop checkout-api || true
+              sudo docker rm checkout-api || true
+              sudo docker pull $NEW_IMAGE
+              sudo docker run -d --name checkout-api -p 80:3000 $NEW_IMAGE
+            "
