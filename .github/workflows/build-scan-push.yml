@@ -35,6 +35,7 @@ jobs:
         with:
           workload_identity_provider: projects/983820798333/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
           service_account: github-actions-sa@freshcart-capstone-2234.iam.gserviceaccount.com
+          token_format: access_token
           create_credentials_file: true
 
       # DIAGNOSTIC ONLY
