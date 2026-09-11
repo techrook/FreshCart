@@ -123,12 +123,17 @@ jobs:
           
           echo "Deploying new image to $VM_NAME: $NEW_IMAGE"
           
-          # SSH through IAP, authenticate docker with the VM's service account token, and update the container
           gcloud compute ssh $VM_NAME \
             --zone=$ZONE \
             --tunnel-through-iap \
             --command="
-              sudo docker login -u oauth2accesstoken -p \"\$(gcloud auth print-access-token)\" us-east1-docker.pkg.dev
+              # 1. Fetch access token directly from the GCE metadata server (bypasses gcloud config issues)
+              TOKEN=\$(curl -s -H 'Metadata-Flavor: Google' 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' | sed -n 's/.*\"access_token\":\"\\([^\"]*\\)\".*/\\1/p')
+              
+              # 2. Login to Artifact Registry using the token (Docker recommended --password-stdin method)
+              echo \$TOKEN | sudo docker login -u oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
+              
+              # 3. Deploy the new container
               sudo docker stop checkout-api || true
               sudo docker rm checkout-api || true
               sudo docker pull $NEW_IMAGE
