@@ -123,19 +123,34 @@ jobs:
           
           echo "Deploying new image to $VM_NAME: $NEW_IMAGE"
           
-          gcloud compute ssh $VM_NAME \
-            --zone=$ZONE \
-            --tunnel-through-iap \
-            --command="
-              # 1. Fetch access token directly from the GCE metadata server (bypasses gcloud config issues)
-              TOKEN=\$(curl -s -H 'Metadata-Flavor: Google' 'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token' | sed -n 's/.*\"access_token\":\"\\([^\"]*\\)\".*/\\1/p')
-              
-              # 2. Login to Artifact Registry using the token (Docker recommended --password-stdin method)
-              echo \$TOKEN | sudo docker login -u oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
-              
-              # 3. Deploy the new container
-              sudo docker stop checkout-api || true
-              sudo docker rm checkout-api || true
-              sudo docker pull $NEW_IMAGE
-              sudo docker run -d --name checkout-api -p 80:3000 $NEW_IMAGE
-            "
+          # 1. Create the deployment script locally in the GitHub Runner
+          cat > /tmp/deploy.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          IMAGE="$1"
+
+          # Clear stale docker config that might trigger interactive gcloud prompts
+          rm -f /root/.docker/config.json
+
+          # Fetch token directly from GCE metadata server (dependency-free)
+          TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | \
+            grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+
+          # Non-interactive docker login
+          echo "$TOKEN" | docker login -u oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
+
+          # Deploy the new container
+          docker stop checkout-api || true
+          docker rm checkout-api || true
+          docker pull "$IMAGE"
+          docker run -d --name checkout-api -p 80:3000 "$IMAGE"
+          EOF
+
+          # 2. Copy the script to the VM
+          gcloud compute scp /tmp/deploy.sh "$VM_NAME":/tmp/deploy.sh \
+            --zone="$ZONE" --tunnel-through-iap --quiet
+
+          # 3. Execute the script on the VM with root privileges
+          gcloud compute ssh "$VM_NAME" --zone="$ZONE" --tunnel-through-iap \
+            --command="sudo bash /tmp/deploy.sh '$NEW_IMAGE'"
