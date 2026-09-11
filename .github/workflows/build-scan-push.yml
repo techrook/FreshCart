@@ -123,35 +123,31 @@ jobs:
 
           echo "Deploying new image to $VM_NAME: $NEW_IMAGE"
 
-          # 1. Create the deployment script locally on the GitHub Runner
           cat > /tmp/deploy.sh << 'EOF'
           #!/bin/bash
-          set -euo pipefail
+          set -euxo pipefail
           IMAGE="$1"
 
-          # Clear stale docker config that triggers interactive gcloud prompts
           sudo rm -f /root/.docker/config.json
 
-          # Fetch token directly from GCE metadata server
-          TOKEN=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+          TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+            | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
 
-          # Non-interactive docker login
           echo "$TOKEN" | sudo docker login -u oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
 
-          # Deploy the new container
           sudo docker stop checkout-api || true
           sudo docker rm checkout-api || true
           sudo docker pull "$IMAGE"
           sudo docker run -d --name checkout-api -p 80:3000 "$IMAGE"
 
-          echo "✅ Deployment successful!"
+          echo " Deployment successful!"
           EOF
 
-          # 2. Base64 encode the script to bypass ALL SSH quoting and scp issues
-          ENCODED_SCRIPT=$(base64 -w 0 /tmp/deploy.sh)
+          gcloud compute scp /tmp/deploy.sh "$VM_NAME:/tmp/deploy.sh" \
+            --zone="$ZONE" --tunnel-through-iap
 
-          # 3. Decode and execute directly via a SINGLE, clean SSH connection
           gcloud compute ssh "$VM_NAME" \
             --zone="$ZONE" \
             --tunnel-through-iap \
-            --command="echo '$ENCODED_SCRIPT' | base64 -d | sudo bash -s '$NEW_IMAGE'"
+            --command="chmod +x /tmp/deploy.sh && sudo /tmp/deploy.sh '$NEW_IMAGE'"
