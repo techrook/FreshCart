@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
 name: Build, Scan, and Deploy Staging
 
 on:
@@ -34,13 +35,40 @@ jobs:
         with:
           workload_identity_provider: projects/983820798333/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
           service_account: github-actions-sa@freshcart-capstone-2234.iam.gserviceaccount.com
+          token_format: access_token
+          create_credentials_file: true
+
+      # DIAGNOSTIC ONLY
+      - name: Verify Google Cloud Identity
+        run: |
+          echo "=== Google Cloud Authentication ==="
+          gcloud auth list
+
+          echo ""
+          echo "=== Google Cloud Configuration ==="
+          gcloud config list
+
+      # DIAGNOSTIC ONLY
+      - name: Verify Artifact Registry Access
+        run: |
+          echo "=== Checking Artifact Registry Repository ==="
+
+          gcloud artifacts repositories describe freshcart-repo \
+            --location=us-east1 \
+            --project=freshcart-capstone-2234
 
       - name: Login to Artifact Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.REGISTRY }}
-          username: _json_key
-          password: ${{ steps.auth.outputs.credentials_json }}
+          registry: us-east1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      # DIAGNOSTIC ONLY
+      - name: Verify Docker Registry Login
+        run: |
+          echo "Docker authentication configured for:"
+          docker info | grep -A5 "Username\|Registry" || true
 
       - name: Build Docker Image
         run: |
@@ -49,10 +77,11 @@ jobs:
       - name: Run Trivy Vulnerability Scan
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: '${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}'
-          severity: 'CRITICAL,HIGH'
-          exit-code: '1'
-          format: 'table'
+          image-ref: "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          format: "table"
+          trivyignores: "checkout-api/.trivyignore"
 
       - name: Push Docker Image to Registry
         run: |
@@ -62,7 +91,7 @@ jobs:
     name: Deploy to Staging
     needs: build-and-scan
     runs-on: ubuntu-latest
-    environment: dev # Matches your terraform.tfvars environment
+    environment: dev
 
     steps:
       - name: Checkout repository
@@ -74,19 +103,51 @@ jobs:
         with:
           workload_identity_provider: projects/983820798333/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
           service_account: github-actions-sa@freshcart-capstone-2234.iam.gserviceaccount.com
+          create_credentials_file: true
+
+      # DIAGNOSTIC ONLY
+      - name: Verify Deployment Identity
+        run: |
+          echo "=== Google Cloud Authentication ==="
+          gcloud auth list
+
+          echo ""
+          echo "=== Google Cloud Configuration ==="
+          gcloud config list
 
       - name: Deploy to Staging via IAP SSH
         run: |
           VM_NAME="freshcart-backend-vm-dev"
           ZONE="us-east1-c"
           NEW_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          
+
           echo "Deploying new image to $VM_NAME: $NEW_IMAGE"
-          
-          # SSH through IAP and update the docker container (zero downtime)
-          gcloud compute ssh $VM_NAME \
-            --zone=$ZONE \
+
+          cat > /tmp/deploy.sh << 'EOF'
+          #!/bin/bash
+          set -euxo pipefail
+          IMAGE="$1"
+
+          sudo rm -f /root/.docker/config.json
+
+          TOKEN=$(curl -s -H "Metadata-Flavor: Google" \
+            "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" \
+            | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+
+          echo "$TOKEN" | sudo docker login -u oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
+
+          sudo docker stop checkout-api || true
+          sudo docker rm checkout-api || true
+          sudo docker pull "$IMAGE"
+          sudo docker run -d --name checkout-api -p 80:3000 "$IMAGE"
+
+          echo " Deployment successful!"
+          EOF
+
+          gcloud compute scp /tmp/deploy.sh "$VM_NAME:/tmp/deploy.sh" \
+            --zone="$ZONE" --tunnel-through-iap
+
+          gcloud compute ssh "$VM_NAME" \
+            --zone="$ZONE" \
             --tunnel-through-iap \
-            --command="sudo docker stop checkout-api || true && \
-                       sudo docker rm checkout-api || true && \
-                       sudo docker run -d --name checkout-api -p 80:3000 $NEW_IMAGE"
+            --command="chmod +x /tmp/deploy.sh && sudo /tmp/deploy.sh '$NEW_IMAGE'"

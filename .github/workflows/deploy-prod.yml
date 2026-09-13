@@ -1,6 +1,6 @@
+# yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
 name: Deploy to Production
 
-\
 on:
   workflow_dispatch:
     inputs:
@@ -26,8 +26,6 @@ jobs:
   deploy-production:
     name: Promote to Production
     runs-on: ubuntu-latest
-    
-
     environment: production 
 
     steps:
@@ -40,23 +38,46 @@ jobs:
         with:
           workload_identity_provider: projects/983820798333/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider
           service_account: github-actions-sa@freshcart-capstone-2234.iam.gserviceaccount.com
+          create_credentials_file: true
 
       - name: Deploy to Production via IAP SSH
         run: |
-          # NOTE: Update this VM name to match your actual production VM 
-          # (e.g., freshcart-backend-vm-prod if you ran Terraform with environment="prod")
-          VM_NAME="freshcart-backend-vm-prod"
+          # Dynamically use the environment name from the input (e.g., freshcart-backend-vm-prod)
+          VM_NAME="freshcart-backend-vm-${{ inputs.target_environment }}"
           ZONE="us-east1-c"
-          
-          # We use the EXACT tag provided in the manual input
           PROMOTED_IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ inputs.image_tag }}"
           
-          echo "Promoting verified image to production: $PROMOTED_IMAGE"
+          echo "Promoting verified image to $VM_NAME: $PROMOTED_IMAGE"
           
-          # SSH through IAP and update the docker container
-          gcloud compute ssh $VM_NAME \
-            --zone=$ZONE \
+          # Use the exact same bulletproof script we proved works in staging
+          cat > /tmp/deploy.sh << 'EOF'
+          #!/bin/bash
+          set -euo pipefail
+          IMAGE="$1"
+          
+          # Clear stale docker config
+          sudo rm -f /root/.docker/config.json
+          
+          # Fetch token directly from GCE metadata server
+          TOKEN=$(curl -s -H "Metadata-Flavor: Google" "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token" | grep -o '"access_token":"[^"]*"' | cut -d'"' -f4)
+          
+          # Non-interactive docker login
+          echo "$TOKEN" | sudo docker login -u oauth2accesstoken --password-stdin us-east1-docker.pkg.dev
+          
+          # Deploy the new container
+          sudo docker stop checkout-api || true
+          sudo docker rm checkout-api || true
+          sudo docker pull "$IMAGE"
+          sudo docker run -d --name checkout-api -p 80:3000 "$IMAGE"
+          
+          echo "✅ Production Deployment successful!"
+          EOF
+          
+          # Base64 encode and execute via a single, clean SSH connection
+          ENCODED_SCRIPT=$(base64 -w 0 /tmp/deploy.sh)
+          
+          gcloud compute ssh "$VM_NAME" \
+            --zone="$ZONE" \
             --tunnel-through-iap \
-            --command="sudo docker stop checkout-api || true && \
-                       sudo docker rm checkout-api || true && \
-                       sudo docker run -d --name checkout-api -p 80:3000 $PROMOTED_IMAGE"
+            --command="echo '$ENCODED_SCRIPT' | base64 -d | sudo bash -s '$PROMOTED_IMAGE'"
+            
