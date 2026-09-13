@@ -80,3 +80,4 @@ jobs:
             --zone="$ZONE" \
             --tunnel-through-iap \
             --command="echo '$ENCODED_SCRIPT' | base64 -d | sudo bash -s '$PROMOTED_IMAGE'"
+            
